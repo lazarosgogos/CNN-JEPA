@@ -75,7 +75,7 @@ class IJEPA_CNN(LightlyModelMomentum):
             deactivate_requires_grad(self.projection_head_momentum)
 
             self.projection_head = sparse_encoder.dense_model_to_sparse(self.projection_head)
-           
+
         pred_layers = []
         for i in range(self.cfg.predictor.n_layers):
             if self.cfg.predictor.get("dw_sep_conv", False):
@@ -127,11 +127,11 @@ class IJEPA_CNN(LightlyModelMomentum):
         context_bchw = inp_bchw * context_mask_b1hw
         target_bchw = inp_bchw * target_mask_b1hw
         return [inp_bchw, context_bchw, target_bchw]
-    
+
     def contrastive_acc_eval(self, dataset, file_paths=None):
         sparse_encoder._cur_active = torch.ones_like(sparse_encoder._cur_active)
         return contrastive_acc_eval(self.backbone_momentum, dataset, input_size=self.input_size)
-    
+
     def eval_feature_descriptors(self, dataset):
         sparse_encoder._cur_active = torch.ones_like(sparse_encoder._cur_active)
         return eval_feature_descriptors(
@@ -146,7 +146,7 @@ class IJEPA_CNN(LightlyModelMomentum):
     #     sparse_encoder._cur_active = torch.ones((1, 1, mask_shape[2], mask_shape[3]),
     #                                              device=sparse_encoder._cur_active.device)
     #     super().on_validation_epoch_end()
-    
+
     def mask(self, B: int, device, generator=None):
         if self.cfg.mask.strategy == "mixed":
             if torch.rand(1) < self.cfg.mask.mixed_mutli_block_ratio:
@@ -167,7 +167,6 @@ class IJEPA_CNN(LightlyModelMomentum):
             context_mask = context_mask.unsqueeze(1).to(device, dtype=torch.bool)
             target_mask = target_mask.unsqueeze(1).to(device, dtype=torch.bool)
             return context_mask, target_mask
-               
 
     def forward(self, x):
         inp_bchw = x
@@ -176,14 +175,14 @@ class IJEPA_CNN(LightlyModelMomentum):
         sparse_encoder._cur_active = context_mask_b1ff    # (B, 1, f, f)
         active_b1hw = context_mask_b1ff.repeat_interleave(self.downsample_raito, 2).repeat_interleave(self.downsample_raito, 3)  # (B, 1, H, W)
         masked_bchw = inp_bchw * active_b1hw
-        
+
         # step2. Encode
         features_bcff = self.backbone_sparse(masked_bchw)
 
         # step 3. Project
         if self.projection_head is not None:
             features_bcff = self.projection_head(features_bcff)
-        
+
         # step 4. Fill-in mask tokens
         mask_tokens = self.mask_token.expand_as(features_bcff) # expands singleton dimensions to match the shape of features_bcff
         # where context_mask_b1ff is True, use features_bcff, where it's False (i.e. where it masked out a patch) use mask_tokens
@@ -199,10 +198,59 @@ class IJEPA_CNN(LightlyModelMomentum):
             z = self.projection_head_momentum(z)
         return z.detach()
 
+    def PKT_cosine_similarity_loss(self, output_net, target_net, eps=0.0000001):
+        """Source: https://github.com/passalis/probabilistic_kt/blob/master/nn/pkt.py#L88 
+        by Passalis Nikolaos"""
+        # Normalize each vector by its norm
+        output_net_norm = torch.sqrt(torch.sum(output_net ** 2, dim=1, keepdim=True))
+        output_net = output_net / (output_net_norm + eps)
+        output_net[output_net != output_net] = 0
+
+        target_net_norm = torch.sqrt(torch.sum(target_net ** 2, dim=1, keepdim=True))
+        target_net = target_net / (target_net_norm + eps)
+        target_net[target_net != target_net] = 0
+
+        # Calculate the cosine similarity
+        model_similarity = torch.mm(output_net, output_net.transpose(0, 1)) 
+        target_similarity = torch.mm(target_net, target_net.transpose(0, 1))
+
+        # Scale cosine similarity to 0..1
+        model_similarity = (model_similarity + 1.0) / 2.0
+        target_similarity = (target_similarity + 1.0) / 2.0
+
+        # Transform them into probabilities
+        model_similarity = model_similarity / torch.sum(model_similarity, dim=1, keepdim=True)
+        target_similarity = target_similarity / torch.sum(target_similarity, dim=1, keepdim=True)
+
+        # Calculate the KL-divergence
+        loss = torch.mean(target_similarity * torch.log((target_similarity + eps) / (model_similarity + eps)))
+
+        return loss
+
     def train_val_step(self, batch, batch_idx, metric_label="train_metrics"):
         x = batch[0]
         p, _, target_mask_b1ff = self.forward(x)
         h = self.forward_momentum(x)
+        # PKT additions
+        D = p.size(dim=1) # get dimensionality of patches
+        mask = target_mask_b1ff.squeeze(1).bool() # Shape: (B, H, W)
+
+        # create tensor copies
+        p_copy = p.permute(0, 2, 3, 1)[mask].reshape(-1, D) # index only masked tokens
+        h_copy = h.permute(0, 2, 3, 1)[mask].reshape(-1, D) # do this or calculate similarity across whole image?
+        # no, similarity across the whole image would be high, since the image is similar with itself !
+        # anyway, maybe this is another direction in which research can be done.
+        chunks_step = 256
+        loss_pkt = 0
+        vsize = h_copy.size(0)  # vector size
+        for i in range(0, vsize, chunks_step):
+            # loss_pkt += PKTClass.cosine_similarity_loss(z_[rperm[i:i+chunks_step]],h_[rperm[i:i+chunks_step]])
+
+            loss_pkt += self.PKT_cosine_similarity_loss(p_copy[i:i+chunks_step],h_copy[i:i+chunks_step])  
+            # loss_L2 += L2(z_[i:i+step],h_[i:i+step])
+
+        # loss_pkt = (loss_pkt)/(vsize/chunks_step) # normalize based on how many iterations were done
+
         # Normalize in feature dimension separately for each patch
         p = F.normalize(p, dim=1)
         h = F.normalize(h, dim=1)
@@ -211,8 +259,8 @@ class IJEPA_CNN(LightlyModelMomentum):
         neg_mask_b1ff = target_mask_b1ff
         loss = loss.mul_(neg_mask_b1ff).sum() / (neg_mask_b1ff.sum() + 1e-8)  # loss only on masked patches
         self.log(f"{metric_label}/ijepa_loss", loss, on_epoch=True)
-        return loss
-    
+        return loss + loss_pkt
+
     # def configure_optimizers(self):
     #     # Don't use weight decay for batch norm, bias parameters, and classification
     #     # head to improve performance.
@@ -220,7 +268,7 @@ class IJEPA_CNN(LightlyModelMomentum):
     #         [
     #             self.backbone_sparse,
     #             self.predictor,
-    #         ] + 
+    #         ] +
     #         ([self.projection_head] if self.projection_head is not None else [])
     #     )
     #     param_groups = [

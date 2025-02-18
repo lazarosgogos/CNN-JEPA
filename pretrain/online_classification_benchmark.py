@@ -7,7 +7,7 @@
 from omegaconf import DictConfig, OmegaConf
 import os
 from tqdm import tqdm
-
+import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,6 +18,8 @@ from lightly.transforms.utils import IMAGENET_NORMALIZE
 from lightly.utils.benchmarking import knn_predict
 from lightly.utils.benchmarking.topk import mean_topk_accuracy
 import pytorch_lightning as pl
+
+disable_tqdm = not sys.stdout.isatty()
 
 class OnlineLinearClassificationBenckmark:
     def __init__(
@@ -139,7 +141,7 @@ class OnlineLinearClassificationBenckmark:
         train_dataloader.dataset.datasets.transform = train_val_transform
         val_dataloader.dataset.transform = train_val_transform
         return results_dict
-    
+
     @torch.no_grad()
     def compute_features(self, dataloader, device):
         """
@@ -147,7 +149,10 @@ class OnlineLinearClassificationBenckmark:
         """
         features = []
         targets = []
-        for batch in tqdm(dataloader, desc=f"Computing features on {device}"):
+        print(f"Computing features on {device}")
+        for batch in dataloader: #tqdm(
+        #     dataloader, desc=f"Computing features on {device}", disable=disable_tqdm
+        # ):
             inputs, targets_batch = batch[0], batch[1]
             inputs = inputs.to(device)
             targets_batch = targets_batch.to(device)
@@ -161,14 +166,14 @@ class OnlineLinearClassificationBenckmark:
             features.append(representations)
             targets.append(targets_batch)
         return features, targets
-    
+
     @staticmethod
     def fit_lin_classifier(train_features, train_targets, classifier, optimizer):
         for batch in zip(train_features, train_targets):
             features_batch, targets_batch = batch
             # Classifier forward pass and optimization
             with torch.enable_grad():
-                # If we call online_linear_classification_benchmark from a lightning module's on_validation_epoch_end, 
+                # If we call online_linear_classification_benchmark from a lightning module's on_validation_epoch_end,
                 # gradient computation is disabled by default. (check it with torch.is_grad_enabled())
                 # For training the linear classifier we need to enable it again.
                 optimizer.zero_grad()
@@ -176,14 +181,14 @@ class OnlineLinearClassificationBenckmark:
                 loss = nn.CrossEntropyLoss()(outputs, targets_batch)
                 loss.backward()
                 optimizer.step()
-    
+
     @torch.no_grad()
     def evaluate_lin_classifier(self, val_features, val_labels, classifier):
         val_features_tensor = torch.cat(val_features, dim=0)
         val_labels_tensor = torch.cat(val_labels, dim=0)
 
         outputs = classifier(val_features_tensor)
-        
+
         _, predicted_classes = outputs.topk(max(self.topk))
 
         topk = mean_topk_accuracy(
@@ -191,7 +196,7 @@ class OnlineLinearClassificationBenckmark:
         )
         results_dict = {f"lin_top{k}": acc for k, acc in topk.items()}
         return results_dict
-    
+
     @torch.no_grad()
     def evaluate_knn_classifier(self, feature_bank, label_bank, val_features, val_labels, k=200, t=0.1, eval_batch_size=64):
         feature_bank_tensor = torch.cat(feature_bank, dim=0)
@@ -207,8 +212,10 @@ class OnlineLinearClassificationBenckmark:
         feature_bank_tensor = F.normalize(feature_bank_tensor, dim=1).T
 
         predicted_classes = []
-
-        for val_features_tensor in tqdm(val_features, desc="Evaluating kNN"):
+        print("Evaluating kNN")
+        for val_features_tensor in val_features: # tqdm(
+        #     val_features, desc="Evaluating kNN", disable=disable_tqdm
+        # ):
             val_features_tensor = F.normalize(val_features_tensor, dim=1)
 
             predicted_classes_batch = knn_predict(
@@ -220,7 +227,7 @@ class OnlineLinearClassificationBenckmark:
                 knn_t=t,
             )
             predicted_classes.append(predicted_classes_batch)
-        
+
         predicted_classes = torch.cat(predicted_classes, dim=0)
 
         topk = mean_topk_accuracy(
@@ -229,7 +236,7 @@ class OnlineLinearClassificationBenckmark:
         results_dict = {f"knn_top{k}": acc for k, acc in topk.items()}
 
         return results_dict
-        
+
     @torch.no_grad()
     def compute_dummy_features(self, dataloader, device):
         """Use:

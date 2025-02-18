@@ -8,7 +8,7 @@ import os
 from tqdm import tqdm
 import numpy as np
 import wandb
-
+import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F 
@@ -20,6 +20,8 @@ from lightly.transforms import SimCLRTransform
 from lightly.data import LightlyDataset
 # from lightly.transforms.utils import IMAGENET_NORMALIZE
 IMAGENET_NORMALIZE = {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}
+
+disable_tqdm = not sys.stdout.isatty()
 
 def compute_contrastive_acc(features_0, features_1):
     # Based on https://github.com/beresandras/contrastive-classification-keras/blob/c32077d073c74cd741a456415035a77b5db1df77/models.py#L42
@@ -46,35 +48,38 @@ def compute_contrastive_acc(features_0, features_1):
 
 
 def contrastive_acc_eval(backbone: nn.Module, dataset, batch_size: int = 64, input_size: int = 224):
-        contrastive_acc_transform = SimCLRTransform(input_size=input_size)
+    contrastive_acc_transform = SimCLRTransform(input_size=input_size)
 
-        dataset = LightlyDataset.from_torch_dataset(dataset, transform=contrastive_acc_transform)
-        dataloader = DataLoader(
+    dataset = LightlyDataset.from_torch_dataset(dataset, transform=contrastive_acc_transform)
+    dataloader = DataLoader(
             dataset,
             batch_size=batch_size,
             shuffle=True,
             drop_last=False,
             num_workers=8,
         )
-        contrastive_accs = []
-        backbone.eval()
-        for batch in tqdm(dataloader, desc="Computing contrastive accuracy"):
-            x0, x1 = batch[0]
-            x0 = x0.to("cuda")
-            x1 = x1.to("cuda")
-            z0 = backbone(x0)
-            z1 = backbone(x1)
-            if len(z0.shape) > 2:
-                # if we get pre-pooling feature maps, pool them. 
-                # compute_contrastive_acc expects (batch,features) shaped tensors
-                z0 = torch.flatten(F.adaptive_avg_pool2d(z0, 1), start_dim=1)
-                z1 = torch.flatten(F.adaptive_avg_pool2d(z1, 1), start_dim=1)
-            contrastive_acc = compute_contrastive_acc(z0, z1)
-            contrastive_accs.append(contrastive_acc)
-            
-        contrastive_acc = torch.mean(torch.stack(contrastive_accs))
+    contrastive_accs = []
+    backbone.eval()
+    print("Computing contrastive accuracy")
+    for batch in dataloader: #tqdm(
+        # dataloader, desc="Computing contrastive accuracy", disable=disable_tqdm
+    # ):
+        x0, x1 = batch[0]
+        x0 = x0.to("cuda")
+        x1 = x1.to("cuda")
+        z0 = backbone(x0)
+        z1 = backbone(x1)
+        if len(z0.shape) > 2:
+            # if we get pre-pooling feature maps, pool them.
+            # compute_contrastive_acc expects (batch,features) shaped tensors
+            z0 = torch.flatten(F.adaptive_avg_pool2d(z0, 1), start_dim=1)
+            z1 = torch.flatten(F.adaptive_avg_pool2d(z1, 1), start_dim=1)
+        contrastive_acc = compute_contrastive_acc(z0, z1)
+        contrastive_accs.append(contrastive_acc)
 
-        return contrastive_acc
+    contrastive_acc = torch.mean(torch.stack(contrastive_accs))
+
+    return contrastive_acc
 
 
 def log_example_inputs(views, log_label="train", num_examples=8):
@@ -131,12 +136,15 @@ def eval_feature_descriptors(backbone: nn.Module, dataset, batch_size: int = 64,
     feats = []
     labels = []
     backbone.eval()
-    for batch in tqdm(dataloader, desc="Computing feature descriptors"):
+    print("Computing feature descriptors")
+    for batch in dataloader: #tqdm(
+    #     dataloader, desc="Computing feature descriptors", disable=disable_tqdm
+    # ):
         x0, label = batch
         x0 = x0.to("cuda")
         z0 = backbone(x0)
         if len(z0.shape) > 2:
-            # if we get pre-pooling feature maps, pool them. 
+            # if we get pre-pooling feature maps, pool them.
             # compute_contrastive_acc expects (batch,features) shaped tensors
             z0 = torch.flatten(F.adaptive_avg_pool2d(z0, 1), start_dim=1)
         feats.append(z0.detach())

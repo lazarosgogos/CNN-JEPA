@@ -29,7 +29,7 @@ from pretrain.online_classification_benchmark import OnlineLinearClassificationB
 import utils
 
 from data.imagenette import Imagenette
-from data.cached_imagenet import CachedImageNet
+# from data.cached_imagenet import CachedImageNet
 from data.hdf5_imagefolder import HDF5ImageFolder
 
 class LightlyModel(pl.LightningModule):
@@ -78,7 +78,7 @@ class LightlyModel(pl.LightningModule):
         loss = self.train_val_step(batch, batch_idx)
         self.log(f"train_metrics/lr", self.trainer.optimizers[0].param_groups[0]["lr"])
         self.log(f"train_metrics/wd", self.trainer.optimizers[0].param_groups[0]["weight_decay"])
-        
+
         if hasattr(self, "wd_scheduler"):
             self.wd_scheduler.step()
         return loss
@@ -179,23 +179,23 @@ class LightlyModel(pl.LightningModule):
             "stl10": torchvision.datasets.STL10,
             "tiny-imagenet": torchvision.datasets.ImageFolder,
             "imagenette": Imagenette,
-            "imagenet-100": HDF5ImageFolder, # Replaceable with torchvision.datasets.ImageFolder
-            "imagenet-1k":  HDF5ImageFolder, # Replaceable with torchvision.datasets.ImageFolder
+            "imagenet-100": HDF5ImageFolder,  # Replaceable with torchvision.datasets.ImageFolder
+            "imagenet-1k":  HDF5ImageFolder,  # Replaceable with torchvision.datasets.ImageFolder
         }
         train_dataset_kwargs = {
             "cifar10": dict(root="/data/cifar10", download=True),
-            "stl10": dict(root="/data/stl10", download=True, split='train+unlabeled'),
+            "stl10": dict(root="/data/stl10", download=True, split="train+unlabeled"),
             "tiny-imagenet": dict(root="/data/tiny-imagenet-200/train"),
             "imagenette": dict(root="/data/imagenette", split='train', download=True),
-            "imagenet-100": dict(root="/data/imagenet-100-train.h5"),
+            "imagenet-100": dict(root="data/imagenet-100-train.h5"),
             "imagenet-1k": dict(root="/data/imagenet-train.h5"),
         }
         val_dataset_kwargs = {
             "cifar10": dict(root="/data/cifar10", train=False),
-            "stl10": dict(root="/data/stl10", split='test'),
+            "stl10": dict(root="/data/stl10", split="test"),
             "tiny-imagenet": dict(root="/data/tiny-imagenet-200/val"),
             "imagenette": dict(root="/data/imagenette", split='val'),
-            "imagenet-100": dict(root="/data/imagenet-100-val.h5"),
+            "imagenet-100": dict(root="data/imagenet-100-val.h5"),
             "imagenet-1k": dict(root="/data/imagenet-val.h5"),
         }
         input_sizes = {

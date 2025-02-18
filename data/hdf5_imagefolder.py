@@ -16,6 +16,9 @@ from PIL import Image
 from tqdm import tqdm
 from torchvision import datasets, transforms
 from torch.utils.data import Dataset, DataLoader
+import sys
+
+disable_tqdm = not sys.stdout.isatty()
 
 # Function to save ImageNet dataset to HDF5 based on https://blade6570.github.io/soumyatripathy/hdf5_blog.html
 def save_imagenet_to_hdf5(dataset_root, output_file, num_workers=4):
@@ -37,8 +40,9 @@ def save_imagenet_to_hdf5(dataset_root, output_file, num_workers=4):
         # Use DataLoader to load images in parallel, but they are in binary format, and can't stack them 
         dataloader = DataLoader(imagenet_data, batch_size=32, num_workers=num_workers, collate_fn=lambda x: x)
 
+        print(f"Saving to {output_file}")
         # Save data to HDF5 file
-        for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc=f"Saving to {output_file}"):
+        for i, batch in enumerate(dataloader): #tqdm(enumerate(dataloader), total=len(dataloader), desc=f"Saving to {output_file}", disable=disable_tqdm):
             for j, (image, label) in enumerate(batch):
                 images_dset.create_dataset(f"{i*32+j}", data=image)
                 labels_dset.create_dataset(f"{i*32+j}", data=label)
@@ -75,15 +79,15 @@ class HDF5ImageFolder(Dataset):
             image = self.transform(image)
         return image, label
 
-  
+
 if __name__ == "__main__":
-    data_root = '/data'
-    dataset = 'imagenet-100'
+    data_root = "data"
+    dataset = "imagenet100"
     # for split in ['val','train']:
     #     dataset_root = os.path.join(data_root, dataset, split)
     #     output_file = os.path.join(data_root, f'{dataset}-{split}.h5')
     #     save_imagenet_to_hdf5(dataset_root, output_file, num_workers=4)
-
+    
     # HDF5 file generation times
     # | Dataset      | Split | Time     |
     # |--------------|-------|----------|
@@ -107,7 +111,7 @@ if __name__ == "__main__":
     dataloader = DataLoader(custom_dataset, batch_size=32, shuffle=True, num_workers=12)
 
     start = time.time()
-    for i, batch in tqdm(enumerate(dataloader), total=len(dataloader)):
+    for i, batch in enumerate(dataloader): #tqdm(enumerate(dataloader), total=len(dataloader), disable=disable_tqdm):
         pass
     print(f"Time to iterate over the dataloader: {time.time()-start:.2f} seconds")
     print(f"Memory usage: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024:.2f} MB")
@@ -121,7 +125,6 @@ if __name__ == "__main__":
     # for i, batch in tqdm(enumerate(standard_dataloader), total=len(standard_dataloader)):
     #     pass
     # print(f"Time to iterate over the standard dataloader: {time.time()-start:.2f} seconds")
-
 
     # Performance comparison on imagenet-100 train dataset
     # | Dataset type                                               | Time      | Memory usage |
